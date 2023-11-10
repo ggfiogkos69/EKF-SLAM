@@ -2,84 +2,84 @@
 //#include <Eigen/Dense>
 #include "/Users/christos/Documents/headers/Eigen/Dense"
 
-using namespace Eigen;
 
-// State transition function for a 2D system: x' = Ax + Bu + process_noise
-MatrixXd stateTransition(const MatrixXd& A, const MatrixXd& B, const VectorXd& x, const VectorXd& u, const MatrixXd& process_noise) {
-    return A * x + B * u + process_noise;
+typedef Eigen::MatrixXd Matrix;
+typedef Eigen::VectorXd Vector;
+
+// Initialization
+Vector state_vector;  // State vector [x, y, theta, landmark1_x, landmark1_y, landmark2_x, landmark2_y, ...]
+Matrix Sigma;  // Covariance matrix
+
+// Noise
+Matrix Q;  
+Matrix R;  
+
+// Pose update - changing x,y,theta
+Vector kinematic_update(const Vector& state, const Vector& velocity) {
+    double dt = 1.0;  
+    Vector new_state(3);
+    double v = velocity(0);  
+    double omega = velocity(1);
+
+    // Update the pose
+    new_state(0) = state(0) - (v * std::sin(state(2)) / omega) + (v * std::sin(state(2) + omega * dt) / omega);
+    new_state(1) = state(1) + (v * std::cos(state(2)) / omega) - (v * std::cos(state(2) + omega * dt) / omega);
+    new_state(2) = state(2) + omega * dt;
+
+    return new_state;
 }
 
-// Observation function for a 2D system: z = Cx + measurement_noise
-VectorXd observationFunction(const MatrixXd& C, const VectorXd& x, const MatrixXd& measurement_noise) {
-    return C * x + measurement_noise;
+// PREDICTION STEP
+void predictionStep(Vector& state_vector, Matrix& Sigma, const Vector& velocity) {
+    // State Prediction
+    state_vector.head(3) = kinematic_update(state_vector.head(3), velocity);
+
+    // Covariance Prediction
+    //MATHHHHHHHHHH
+    Matrix G = Matrix::Identity(state_vector.size(), state_vector.size());
+    Sigma = G * Sigma * G.transpose() + R;
 }
+
+// UPDATE STEP
+void updateStep(Vector& state_vector, Matrix& Sigma, const Vector& measurements) {
+    // MEASUREMENTS AND DATA ASSOCIATION FROM GRAPH_SLAM
+    // ADD STUFF
+    Matrix H,z,h;
+    
+        // GLOBAL AND LOCAL COORDINATES !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+    // KALMAN GAIN
+        Matrix K = Sigma * H.transpose() * (H * Sigma * H.transpose() + Q).inverse();
+
+    // FINAL STATE VECTOR
+        state_vector = state_vector + K * (z - h);
+
+    // FINAL COV MATRIX
+        Sigma = (Matrix::Identity(state_vector.size(), state_vector.size()) - K * H) * Sigma;
+
+    // WE WILL SEE IF IT WILL RETURN state vector, Sigma
+
+}
+
 
 int main() {
-    // Define the state dimension
-    const int stateDim = 2;
+    // POSE, COV, NOISE INITIALIZATION
+    int num_step = 69;
 
-    // Define the process and measurement noise covariance matrices
-    const double processNoiseVar = 0.01;
-    const double measurementNoiseVar = 0.1;
+    for (int tt = 0; tt < num_step; ++tt) {
+        
+        // ROS ODOMETRY FEED
+        Vector velocity;  
 
-    MatrixXd Q = MatrixXd::Identity(stateDim, stateDim) * processNoiseVar;
-    MatrixXd R = MatrixXd::Identity(stateDim, stateDim) * measurementNoiseVar;
+        // ROS PERCEPTION FEED
+        Vector measurements;
 
-    // Initial state estimate and covariance
-    VectorXd x_hat(stateDim);
-    x_hat << 0.0, 0.0; // Initial guess
-    MatrixXd P(stateDim, stateDim);
-    P << 1.0, 0.0,
-         0.0, 1.0; // Initial guess covariance
+        // Prediction step
+        predictionStep(state_vector, Sigma, velocity);
 
-    // System dynamics matrices
-    MatrixXd A(stateDim, stateDim);
-    A << 1.0, 1.0,
-         0.0, 1.0;
+        // Update step
+        updateStep(state_vector, Sigma, measurements);
 
-    MatrixXd B(stateDim, 1);
-    B << 0.5,
-         1.0;
-
-    // Observation matrix
-    MatrixXd C = MatrixXd::Identity(stateDim, stateDim);
-
-    // Simulation parameters
-    const int numSteps = 100;
-    const double dt = 0.1; // Time step
-
-    for (int i = 0; i < numSteps; ++i) {
-        // True state and input (for simulation purposes)
-        VectorXd trueState = VectorXd::Zero(stateDim);
-        trueState(0) = 2.0 * std::sin(0.1 * i); // Example function
-        double input = 1.0;
-
-        // Simulate the true system
-        VectorXd processNoise = std::sqrt(processNoiseVar) * MatrixXd::Random(stateDim, 1);
-        VectorXd newState = stateTransition(A, B, trueState, VectorXd::Constant(1, input), processNoise);
-
-        // Simulate measurement with noise
-        VectorXd measurementNoise = std::sqrt(measurementNoiseVar) * MatrixXd::Random(stateDim, 1);
-        VectorXd measurement = observationFunction(C, newState, measurementNoise);
-
-        // Extended Kalman Filter prediction step
-        VectorXd predictedState = stateTransition(A, B, x_hat, VectorXd::Constant(1, input), MatrixXd::Zero(stateDim, 1));
-        MatrixXd A_tilde = MatrixXd::Identity(stateDim, stateDim) + dt * A; // Jacobian of the state transition function
-
-        P = A_tilde * P * A_tilde.transpose() + Q;
-
-        // Extended Kalman Filter update step
-        VectorXd y = measurement - observationFunction(C, predictedState, MatrixXd::Zero(stateDim, 1)); // Assuming zero mean for noise
-        MatrixXd H = C; // Jacobian of the observation function
-
-        MatrixXd S = H * P * H.transpose() + R;
-        MatrixXd K = P * H.transpose() * S.inverse();
-
-        x_hat = predictedState + K * y;
-        P = (MatrixXd::Identity(stateDim, stateDim) - K * H) * P;
-
-        // Print the estimated state
-        std::cout << "Estimated State at Step " << i << ": " << x_hat.transpose() << std::endl;
     }
 
     return 0;

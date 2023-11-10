@@ -14,7 +14,7 @@ Eigen::Matrix dim_func;
 Eigen::Matrix identity_matrix;
 
 
-vo id state_prediction(){
+void state_prediction(){
     pred_state_matrix = state_matrix + dim_func.transpose() * kinematic_model; 
 }
 
@@ -28,7 +28,7 @@ void obtained_measurement(){
 }
 
 void data_association(){
-    data association :-)
+    data association :-);
 }
 
 void update_step(){
