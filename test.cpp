@@ -77,56 +77,64 @@ void data_association()
     return;
 }
 
-/*void add_landmarks()
+void add_landmarks()
 {
     return;
 }
-*/
 
 // UPDATE STEP
-void updateStep(VectorXd& state_vector, MatrixXd& Sigma, const VectorXd& measurements, const MatrixXd& R) 
+void updateStep(VectorXd& state_vector, Matrix3d& Sigma, const VectorXd& measurements, const MatrixXd& R) 
 {
     double x = state_vector(0);
     double y = state_vector(1);
+    double theta = state_vector(2);
     
     // Data association
      data_association();
-    
+    int observed_num = 1;
+
     // Initializing new landmarks
     //add_landmarks();
     
     // Perception measurements
     double range = measurements(0);
     double bearing = measurements(1);
+    MatrixXd zt(2,1);
+        zt << range, 
+              bearing;
 
     for(int i=0; i<observed_num; ++i)
     {
-            double x_land = state_vector(0) + range * cos(bearing + state_vector(2));
-            double y_land = state_vector(1) + range * sin(bearing + state_vector(2));
+            double x_land = x + range * cos(bearing + theta);
+            double y_land = y + range * sin(bearing + theta);
             double dx = x_land - x;
             double dy = y_land - y;
 
-            VectorXd d_vec;
-            d_vec << dx, dy;
-            MatrixXd d = d_vec.transpose();
-            MatrixXd q = d.transpose() * d;
-            double sqrt_q = sqrt(q);
-            
+            MatrixXd d(2,1);
+                d << dx,
+                     dy;
+
+            double q = (d.transpose() * d).value();
+            double q_sqrt = sqrt(q);
+
             // EXPECTED OBSERVATION
-            MatrixXd z;
-            z << sqrt_q, atan2(dy,dx);
+            MatrixXd zt_exp(2,1);
+                zt_exp << q_sqrt,
+                     atan2(dy,dx);
 
             // JACOBIAN OF H
-            MatrixXd Ht;
+            MatrixXd Ht(2,3);
+                Ht << - q_sqrt * dx, - q_sqrt * dy, 0,
+                        dy, - dx, - q; 
             
             // KALMAN GAIN
-            MatrixXd K = Sigma * Ht.transpose() * ((Ht * Sigma * Ht.transpose() + Q)).inverse();
+            MatrixXd Kt = Sigma * Ht.transpose() * ((Ht * Sigma * Ht.transpose() + R)).inverse();
 
             // FINAL STATE VectorXd
-            state_vector = state_vector + K * (z - h); // or K* `Δzt
+            state_vector = state_vector + Kt * (zt - zt_exp); // or K* `Δzt
 
             // FINAL COV MATRIXXd
-            Sigma = (MatrixXd::Identity(state_vector.size(), state_vector.size()) - K * H) * Sigma;
+            Sigma = (MatrixXd::Identity(state_vector.size(), state_vector.size()) - Kt * Ht) * Sigma;
     }
 }
  
@@ -144,7 +152,6 @@ VectorXd generateRandomMeasurement() {
     measurement << 0.1 * rand() / RAND_MAX, 0.1 * (2.0 * rand() / RAND_MAX - 1.0);
     return measurement;
 }
-
 
 
 int main() 
@@ -185,8 +192,7 @@ int main()
          updateStep(state_vector, Sigma, measurements, R);
 
         // Print the estimated state after each step
-        //std::cout << "Step: " << step << ", Estimated State: " << state_vector.transpose() << std::endl;
-    
+        std::cout << "Step: " << step << ", Estimated State: " << state_vector.transpose() << std::endl;
     }
 
     return 0;
