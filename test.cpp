@@ -2,16 +2,15 @@
 //#include <Eigen/Dense>
 #include "/Users/christos/Documents/headers/Eigen/Dense"
 
+using namespace Eigen;
 
-typedef Eigen::MatrixXd Matrix;
-typedef Eigen::VectorXd Vector;
 
 
 // Pose update - changing x,y,theta
-Vector kinematic_update(const Vector& pose, const Vector& velocity) 
+VectorXd kinematic_update(const VectorXd& pose, const VectorXd& velocity) 
 {
-    double dt = 1.0;  
-    Vector new_pose(3);
+    double dt = 0.1;  
+    VectorXd new_pose(3);
     double v = velocity(0);  
     double omega = velocity(1);
 
@@ -23,58 +22,52 @@ Vector kinematic_update(const Vector& pose, const Vector& velocity)
     return new_pose;
 }
 
-Matrix motion_jacobian(const Vector& pose, const Vector& velocity) 
+MatrixXd motion_jacobian(const VectorXd& pose, const VectorXd& velocity) 
 {
-    double dt = 1.0;  
-    double v = velocity(0);  
-    double omega = velocity(1);
-
-    Matrix Gx = Matrix::Zero(3, 3);
-    Gx(0,0) = 1.0; 
-    Gx(0,2) = - (v * std::cos(pose(2)) / omega) + (v * std::cos(pose(2) + omega * dt) / omega);
-    Gx(1,1) = 1.0;
-    Gx(1,2) = (v * std::sin(pose(2)) / omega) - (v * std::sin(pose(2) + omega * dt) / omega);
-    Gx(2,2) = dt;     //CHANGE
-    return Gx;
-}
-
-Matrix noise_calibration(const Vector& pose, const Vector& velocity)
-{
-    double dt = 1.0;  
+    double dt = 0.1;  
     double v = velocity(0);  
     double omega = velocity(1);
     double theta = pose(2);
 
-    Matrix Vx = Matrix::Zero(3, 3);
-    Vx(0,0) = cos(theta) * dt; 
-    Vx(0,1) = - sin(theta) * dt;
-    Vx(1,0) = sin(theta) * dt;
-    Vx(1,1) = cos(theta) * dt;
-    Vx(2,2) = 1;     
+    Eigen::Matrix3d Gx;
+        Gx << 1, 0, v * sin(theta) * dt - v * cos(theta) * dt,
+              0, 1, v * cos(theta) * dt - v * sin(theta) * dt,
+              0, 0, dt;
+    
+    return Gx;
+}
+
+MatrixXd noise_transformation(const VectorXd& pose, const VectorXd& velocity)
+{
+    double dt = 0.1;  
+    double v = velocity(0);  
+    double omega = velocity(1);
+    double theta = pose(2);
+
+    Eigen::Matrix3d Vx;
+        Vx << cos(theta) * dt, - sin(theta) * dt, 0,
+              sin(theta) * dt, cos(theta) * dt, 0,
+              0, 0, 1;
+
     return Vx;
 }
 
 // PREDICTION STEP
-void predictionStep(Vector& state_vector, Matrix& Sigma, const Vector& velocity, const Matrix& Q) 
+void predictionStep(VectorXd& state_vector, Matrix3d& Sigma, const VectorXd& velocity, const Matrix3d& Q) 
 {
     // Calculating jacobian of motion model
-    Matrix Gx = motion_jacobian(state_vector.head(3), velocity); 
+    MatrixXd Gt = motion_jacobian(state_vector.head(3), velocity); 
 
-    Matrix Vt = noise_calibration(state_vector.head(3), velocity);
+    MatrixXd Vt = noise_transformation(state_vector.head(3), velocity);
 
-    // Noise matrix calibration based on current state
-    Matrix Qt = Vt * Q * Vt.transpose();
+    // Transformation into State Space
+    MatrixXd Qt = Vt * Q * Vt.transpose();
     
     // State Prediction
     state_vector.head(3) = kinematic_update(state_vector.head(3), velocity);
 
     // Covariance Prediction
-    Eigen::Matrix<Eigen::MatrixXd, 2, 2> G;
-    G(0,0) = Gx;
-    G(0,1) = Matrix::Zero(state_vector.size(), state_vector.size());
-    G(1,0) = Matrix::Zero(state_vector.size(), state_vector.size());
-    G(1,1) = Matrix::Identity(state_vector.size(), state_vector.size());
-    Sigma = (G * Sigma * G.transpose()) + Qt;
+    Sigma = (Gt * Sigma * Gt.transpose()) + Qt;
 }
 
 
@@ -84,13 +77,14 @@ void data_association()
     return;
 }
 
-void add_landmarks()
+/*void add_landmarks()
 {
     return;
 }
+*/
 
 // UPDATE STEP
-void updateStep(Vector& state_vector, Matrix& Sigma, const Vector& measurements, const Matrix& Q) 
+void updateStep(VectorXd& state_vector, MatrixXd& Sigma, const VectorXd& measurements, const MatrixXd& R) 
 {
     double x = state_vector(0);
     double y = state_vector(1);
@@ -99,73 +93,100 @@ void updateStep(Vector& state_vector, Matrix& Sigma, const Vector& measurements,
      data_association();
     
     // Initializing new landmarks
-     add_landmarks();
+    //add_landmarks();
     
     // Perception measurements
     double range = measurements(0);
     double bearing = measurements(1);
 
-    // Loop update
-    Vector H = Zeros(2i, N);
-    Vector Dz = Zeros(2i,1);
-    Vector R = Zeros(2i,2i);
-
     for(int i=0; i<observed_num; ++i)
     {
-           float mjx = state_vector(0) + range * cos(bearing + state_vector(2));
-           float mjy = state_vector(1) + range * sin(bearing + state_vector(2));
-           float dx = mjx - mtx;
-           float dy = mjy - mty;
-            Vector d;
-            d << dx, dy;
-            Matrix d_trans = d.transpose();
-            Matrix q = d * d_trans;
-            float sqrt_q = sqrt(q);
+            double x_land = state_vector(0) + range * cos(bearing + state_vector(2));
+            double y_land = state_vector(1) + range * sin(bearing + state_vector(2));
+            double dx = x_land - x;
+            double dy = y_land - y;
+
+            VectorXd d_vec;
+            d_vec << dx, dy;
+            MatrixXd d = d_vec.transpose();
+            MatrixXd q = d.transpose() * d;
+            double sqrt_q = sqrt(q);
             
             // EXPECTED OBSERVATION
-            Matrix z;
+            MatrixXd z;
             z << sqrt_q, atan2(dy,dx);
 
             // JACOBIAN OF H
-            Matrix Ht;
+            MatrixXd Ht;
             
             // KALMAN GAIN
-            Matrix K = Sigma * H.transpose() * ((H * Sigma * H.transpose() + Q)).inverse();
+            MatrixXd K = Sigma * Ht.transpose() * ((Ht * Sigma * Ht.transpose() + Q)).inverse();
 
-            // FINAL STATE VECTOR
+            // FINAL STATE VectorXd
             state_vector = state_vector + K * (z - h); // or K* `Δzt
 
-            // FINAL COV MATRIX
-            Sigma = (Matrix::Identity(state_vector.size(), state_vector.size()) - K * H) * Sigma;
+            // FINAL COV MATRIXXd
+            Sigma = (MatrixXd::Identity(state_vector.size(), state_vector.size()) - K * H) * Sigma;
     }
 }
+ 
 
-  
+// Function to generate random motion command
+VectorXd generateRandomMotion() {
+    VectorXd velocity(2);
+    velocity << 1.0 + 0.2 * rand() / RAND_MAX, 0.1 * (2.0 * rand() / RAND_MAX - 1.0);
+    return velocity;
+}
+
+// Function to generate random measurement
+VectorXd generateRandomMeasurement() {
+    VectorXd measurement(2);
+    measurement << 0.1 * rand() / RAND_MAX, 0.1 * (2.0 * rand() / RAND_MAX - 1.0);
+    return measurement;
+}
+
+
+
 int main() 
 {
     // POSE, COV, NOISE INITIALIZATION
-    Vector state_vector = Vector::Zero(3);      // x,y,theta,landmarks,colors(?)
-    Matrix Sigma = Matrix::Zero(3, 3);          // covariances
-    Matrix Q = 0.01 * Matrix::Identity(3, 3);   // model noise
-    Matrix R = 0.1 * Matrix::Identity(2, 2);    // sensor noise
+    VectorXd state_vector(3);                        // x,y,theta,landmarks,colors(?)
+        state_vector << 0, 0, 0;      
+   
+    Eigen::Matrix3d Sigma;                           // covariances
+        Sigma << 0, 0, 0,
+                 0, 0, 0,
+                 0, 0, 0;   
+
+    Eigen::Matrix3d Q;                               // model noise
+        Q << 0.01, 0, 0,
+             0, 0.01, 0,
+             0, 0, 0.01;  
+    
+    Eigen::Matrix2d R;                               // sensor noise
+        R << 0.1, 0,
+             0, 0.1;
      
+ int num_steps = 69;
 
-    int num_step = 69;
+    for (int step = 0; step < num_steps; ++step) {
+        // Simulate random motion command
+        VectorXd velocity = generateRandomMotion();
+        //std::cout<<"WORKS1\n";
 
-    for (int tt = 0; tt < num_step; ++tt) 
-    {
+        // Simulate noisy sensor measurement
+        VectorXd measurements = generateRandomMeasurement();
+        //std::cout<<"WORKS2\n";
         
-        // ROS ODOMETRY FEED
-        Vector velocity;  
-
-        // ROS PERCEPTION FEED
-        Vector measurements;
-
         // Prediction step
         predictionStep(state_vector, Sigma, velocity, Q);
 
-        // Update step
-        updateStep(state_vector, Sigma, measurements, Q);
+        // Update step (commented out for simplicity in this test)
+         updateStep(state_vector, Sigma, measurements, R);
+
+        // Print the estimated state after each step
+        //std::cout << "Step: " << step << ", Estimated State: " << state_vector.transpose() << std::endl;
+    
     }
 
     return 0;
