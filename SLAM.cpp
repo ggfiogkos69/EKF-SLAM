@@ -152,7 +152,7 @@ void updateStep(VectorXd& state_vector, MatrixXd& Sigma, const VectorXd& measure
     
     // Data association
     data_association();
-    int measurements_num = 5;
+    int measurements_num = 2;
 
     // Initializing new landmarks
     add_new_landmarks(state_vector, Sigma, measurements, 1);
@@ -236,9 +236,9 @@ int main()
         state_vector << 0, 0, 0;      
    
     MatrixXd Sigma(3,3);                             // covariances
-        Sigma << 0, 0, 0,
-                 0, 0, 0,
-                 0, 0, 0;   
+        Sigma << 0.5, 0, 0,
+                 0, 0.1, 0,
+                 0, 0, 0.1;   
 
     Matrix3d Q;                                      // model noise
         Q << 0.01, 0, 0,
