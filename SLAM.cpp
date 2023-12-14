@@ -153,9 +153,10 @@ void updateStep(VectorXd& state_vector, MatrixXd& Sigma, const VectorXd& measure
     // Data association
     data_association();
     int measurements_num = 2;
+    int unmatched_num = 1;
 
     // Initializing new landmarks
-    add_new_landmarks(state_vector, Sigma, measurements, 1);
+    add_new_landmarks(state_vector, Sigma, measurements, unmatched_num);
     
     // Perception measurements
     double range = measurements(0);
