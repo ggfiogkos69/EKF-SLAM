@@ -5,8 +5,6 @@
 using namespace Eigen;
 
 
-
-// Pose update - changing x,y,theta
 VectorXd kinematic_update(const VectorXd& pose, const VectorXd& velocity) 
 {
     double dt = 0.1;  
@@ -14,10 +12,10 @@ VectorXd kinematic_update(const VectorXd& pose, const VectorXd& velocity)
     double v = velocity(0);  
     double omega = velocity(1);
 
-    // Update the pose
-    new_pose(0) = pose(0) + (v * std::cos(pose(2)) * dt) - (v * std::sin(pose(2)) * dt);  // x
-    new_pose(1) = pose(1) + (v * std::sin(pose(2)) * dt) + (v * std::cos(pose(2)) * dt);  // y
-    new_pose(2) = pose(2) + omega * dt;                                                   // theta
+    // Update the pose (x, y, theta)
+    new_pose(0) = pose(0) + (v * std::cos(pose(2)) * dt) - (v * std::sin(pose(2)) * dt);  
+    new_pose(1) = pose(1) + (v * std::sin(pose(2)) * dt) + (v * std::cos(pose(2)) * dt);  
+    new_pose(2) = pose(2) + omega * dt;                                                   
 
     return new_pose;
 }
@@ -52,22 +50,45 @@ MatrixXd noise_transformation(const VectorXd& pose, const VectorXd& velocity)
     return Vx;
 }
 
-// PREDICTION STEP
-void predictionStep(VectorXd& state_vector, Matrix3d& Sigma, const VectorXd& velocity, const Matrix3d& Q) 
+MatrixXd covariance_update( MatrixXd& Sigma, const MatrixXd& Gt, int state_size)
+{
+    // Utilize block operations
+    int N = state_size - 3;
+    MatrixXd Sigma_vv = Sigma.topLeftCorner(3, 3);
+    MatrixXd Sigma_mm = Sigma.bottomRightCorner(N, N);
+    MatrixXd Sigma_vm = Sigma.topRightCorner(3, N);
+    MatrixXd Sigma_mv = Sigma.bottomLeftCorner(N, 3);
+  
+    // Perform operations
+    Eigen::MatrixXd Sigma_vv_new = Gt * Sigma_vv * Gt.transpose();
+    Eigen::MatrixXd Sigma_mm_new = Sigma_mm;  
+    Eigen::MatrixXd Sigma_vm_new = Gt * Sigma_vm;
+    Eigen::MatrixXd Sigma_mv_new = Sigma_vm_new.transpose();  
+
+    // Reconstruct Sigma
+    Sigma.topLeftCorner(3, 3) = Sigma_vv_new;
+    Sigma.bottomRightCorner(N, N) = Sigma_mm_new;
+    Sigma.topRightCorner(3, N) = Sigma_vm_new;
+    Sigma.bottomLeftCorner(N, 3) = Sigma_mv_new; 
+
+    return Sigma;
+}
+
+
+void predictionStep(VectorXd& state_vector, MatrixXd& Sigma, const VectorXd& velocity, const Matrix3d& Q) 
 {
     // Calculating jacobian of motion model
     MatrixXd Gt = motion_jacobian(state_vector.head(3), velocity); 
 
+    // Noise Transformation into State Space
     MatrixXd Vt = noise_transformation(state_vector.head(3), velocity);
-
-    // Transformation into State Space
     MatrixXd Qt = Vt * Q * Vt.transpose();
     
     // State Prediction
     state_vector.head(3) = kinematic_update(state_vector.head(3), velocity);
 
     // Covariance Prediction
-    Sigma = (Gt * Sigma * Gt.transpose()) + Qt;
+    Sigma = covariance_update(Sigma, Gt, state_vector.size());
 }
 
 
@@ -77,24 +98,17 @@ void data_association()
     return;
 }
 
-void add_landmarks()
-{
-    return;
-}
-
 // UPDATE STEP
-void updateStep(VectorXd& state_vector, Matrix3d& Sigma, const VectorXd& measurements, const MatrixXd& R) 
+void updateStep(VectorXd& state_vector, MatrixXd& Sigma, const VectorXd& measurements, const MatrixXd& Rt) 
 {
     double x = state_vector(0);
     double y = state_vector(1);
     double theta = state_vector(2);
     
     // Data association
-     data_association();
-    int observed_num = 1;
-
-    // Initializing new landmarks
-    //add_landmarks();
+    data_association();
+    int measurements_num = 2;
+    int unmatched_num = 1;
     
     // Perception measurements
     double range = measurements(0);
@@ -103,7 +117,8 @@ void updateStep(VectorXd& state_vector, Matrix3d& Sigma, const VectorXd& measure
         zt << range, 
               bearing;
 
-    for(int i=0; i<observed_num; ++i)
+    int matched_landmarks = 1;
+    for(int i=0; i<matched_landmarks; ++i)
     {
             double x_land = x + range * cos(bearing + theta);
             double y_land = y + range * sin(bearing + theta);
@@ -121,35 +136,34 @@ void updateStep(VectorXd& state_vector, Matrix3d& Sigma, const VectorXd& measure
             MatrixXd zt_exp(2,1);
                 zt_exp << q_sqrt,
                      atan2(dy,dx);
-
-            // JACOBIAN OF H
-            MatrixXd Ht(2,3);
-                Ht << - q_sqrt * dx, - q_sqrt * dy, 0,
-                        dy, - dx, - q; 
             
-            // KALMAN GAIN
-            MatrixXd Kt = Sigma * Ht.transpose() * ((Ht * Sigma * Ht.transpose() + R)).inverse();
+            MatrixXd Ht(2,3);
+               Ht << - q_sqrt * dx, - q_sqrt * dy, 0,
+                        dy, - dx, - q; 
 
-            // FINAL STATE VectorXd
-            state_vector = state_vector + Kt * (zt - zt_exp); // or K* `Δzt
+        // KALMAN GAIN
+        MatrixXd Kt = Sigma * Ht.transpose() * ((Ht * Sigma * Ht.transpose()) + Rt).inverse();
+        
+        // FINAL STATE VectorXd
+        state_vector = state_vector + Kt * (zt - zt_exp); // or K* `Δzt
 
-            // FINAL COV MATRIXXd
-            Sigma = (MatrixXd::Identity(state_vector.size(), state_vector.size()) - Kt * Ht) * Sigma;
+        // FINAL COV MATRIXXd
+        Sigma = (MatrixXd::Identity(state_vector.size(), state_vector.size()) - Kt * Ht) * Sigma;
     }
 }
  
-
-// Function to generate random motion command
+ 
+// random velocity "measurements"
 VectorXd generateRandomMotion() {
     VectorXd velocity(2);
-    velocity << 1.0 + 0.2 * rand() / RAND_MAX, 0.1 * (2.0 * rand() / RAND_MAX - 1.0);
+        velocity << 1.0 + 0.2 * rand() / RAND_MAX, 0.1 * (2.0 * rand() / RAND_MAX - 1.0);
     return velocity;
 }
 
-// Function to generate random measurement
+// random range - bearing "measurements"
 VectorXd generateRandomMeasurement() {
     VectorXd measurement(2);
-    measurement << 0.1 * rand() / RAND_MAX, 0.1 * (2.0 * rand() / RAND_MAX - 1.0);
+        measurement << 0.1 * rand() / RAND_MAX, 0.1 * (2.0 * rand() / RAND_MAX - 1.0);
     return measurement;
 }
 
@@ -160,38 +174,35 @@ int main()
     VectorXd state_vector(3);                        // x,y,theta,landmarks,colors(?)
         state_vector << 0, 0, 0;      
    
-    Eigen::Matrix3d Sigma;                           // covariances
-        Sigma << 0, 0, 0,
-                 0, 0, 0,
-                 0, 0, 0;   
+    MatrixXd Sigma(3,3);                             // covariances
+        Sigma << 0.5, 0, 0,
+                 0, 0.1, 0,
+                 0, 0, 0.1;   
 
-    Eigen::Matrix3d Q;                               // model noise
+    Matrix3d Q;                                      // model noise
         Q << 0.01, 0, 0,
              0, 0.01, 0,
              0, 0, 0.01;  
     
-    Eigen::Matrix2d R;                               // sensor noise
-        R << 0.1, 0,
+    Matrix2d Rt;                                      // sensor noise
+        Rt << 0.1, 0,
              0, 0.1;
      
- int num_steps = 69;
+ int num_steps = 10;
 
     for (int step = 0; step < num_steps; ++step) {
-        // Simulate random motion command
+        
+        // Testing
         VectorXd velocity = generateRandomMotion();
-        //std::cout<<"WORKS1\n";
-
-        // Simulate noisy sensor measurement
         VectorXd measurements = generateRandomMeasurement();
-        //std::cout<<"WORKS2\n";
         
         // Prediction step
         predictionStep(state_vector, Sigma, velocity, Q);
 
-        // Update step (commented out for simplicity in this test)
-         updateStep(state_vector, Sigma, measurements, R);
+        // Update step
+        updateStep(state_vector, Sigma, measurements, Rt);
 
-        // Print the estimated state after each step
+        // Estimated State
         std::cout << "Step: " << step << ", Estimated State: " << state_vector.transpose() << std::endl;
     }
 
