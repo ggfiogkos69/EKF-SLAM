@@ -107,8 +107,6 @@ void updateStep(VectorXd& state_vector, MatrixXd& Sigma, const VectorXd& measure
     
     // Data association
     data_association();
-    int measurements_num = 2;
-    int unmatched_num = 1;
     
     // Perception measurements
     double range = measurements(0);
