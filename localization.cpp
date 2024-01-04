@@ -4,17 +4,19 @@
 
 using namespace Eigen;
 
+std::vector<std::pair<double, double> > landmark_distances;
 
 VectorXd kinematic_update(const VectorXd& pose, const VectorXd& velocity) 
 {
     double dt = 0.1;  
     VectorXd new_pose(3);
-    double v = velocity(0);  
-    double omega = velocity(1);
+    double v_x = velocity(0);
+    double v_y = velocity(1);  
+    double omega = velocity(2);
 
     // Update the pose (x, y, theta)
-    new_pose(0) = pose(0) + (v * std::cos(pose(2)) * dt) - (v * std::sin(pose(2)) * dt);  
-    new_pose(1) = pose(1) + (v * std::sin(pose(2)) * dt) + (v * std::cos(pose(2)) * dt);  
+    new_pose(0) = pose(0) + (v_x * std::cos(pose(2)) * dt) - (v_y * std::sin(pose(2)) * dt);    
+    new_pose(1) = pose(1) + (v_x * std::sin(pose(2)) * dt) + (v_y * std::cos(pose(2)) * dt);  
     new_pose(2) = pose(2) + omega * dt;                                                   
 
     return new_pose;
@@ -23,13 +25,14 @@ VectorXd kinematic_update(const VectorXd& pose, const VectorXd& velocity)
 MatrixXd motion_jacobian(const VectorXd& pose, const VectorXd& velocity) 
 {
     double dt = 0.1;  
-    double v = velocity(0);  
+    double v_x = velocity(0);
+    double v_y = velocity(1);   
     double omega = velocity(1);
     double theta = pose(2);
 
-    Eigen::Matrix3d Gx;
-        Gx << 1, 0, v * sin(theta) * dt - v * cos(theta) * dt,
-              0, 1, v * cos(theta) * dt - v * sin(theta) * dt,
+    Eigen::Matrix3d Gx;                                                 // change - and 1 in dt
+        Gx << 1, 0, v_x * sin(theta) * dt - v_y * cos(theta) * dt,
+              0, 1, v_x * cos(theta) * dt - v_y * sin(theta) * dt,
               0, 0, dt;
     
     return Gx;
@@ -38,7 +41,8 @@ MatrixXd motion_jacobian(const VectorXd& pose, const VectorXd& velocity)
 MatrixXd noise_transformation(const VectorXd& pose, const VectorXd& velocity)
 {
     double dt = 0.1;  
-    double v = velocity(0);  
+    double v_x = velocity(0);
+    double v_y = velocity(1);
     double omega = velocity(1);
     double theta = pose(2);
 
@@ -49,31 +53,6 @@ MatrixXd noise_transformation(const VectorXd& pose, const VectorXd& velocity)
 
     return Vx;
 }
-
-MatrixXd covariance_update( MatrixXd& Sigma, const MatrixXd& Gt, int state_size)
-{
-    // Utilize block operations
-    int N = state_size - 3;
-    MatrixXd Sigma_vv = Sigma.topLeftCorner(3, 3);
-    MatrixXd Sigma_mm = Sigma.bottomRightCorner(N, N);
-    MatrixXd Sigma_vm = Sigma.topRightCorner(3, N);
-    MatrixXd Sigma_mv = Sigma.bottomLeftCorner(N, 3);
-  
-    // Perform operations
-    Eigen::MatrixXd Sigma_vv_new = Gt * Sigma_vv * Gt.transpose();
-    Eigen::MatrixXd Sigma_mm_new = Sigma_mm;  
-    Eigen::MatrixXd Sigma_vm_new = Gt * Sigma_vm;
-    Eigen::MatrixXd Sigma_mv_new = Sigma_vm_new.transpose();  
-
-    // Reconstruct Sigma
-    Sigma.topLeftCorner(3, 3) = Sigma_vv_new;
-    Sigma.bottomRightCorner(N, N) = Sigma_mm_new;
-    Sigma.topRightCorner(3, N) = Sigma_vm_new;
-    Sigma.bottomLeftCorner(N, 3) = Sigma_mv_new; 
-
-    return Sigma;
-}
-
 
 void predictionStep(VectorXd& state_vector, MatrixXd& Sigma, const VectorXd& velocity, const Matrix3d& Q) 
 {
@@ -86,16 +65,38 @@ void predictionStep(VectorXd& state_vector, MatrixXd& Sigma, const VectorXd& vel
     
     // State Prediction
     state_vector.head(3) = kinematic_update(state_vector.head(3), velocity);
-
+    std::cout<<"State after predict: "<<state_vector.transpose()<<std::endl;
     // Covariance Prediction
-    Sigma = covariance_update(Sigma, Gt, state_vector.size());
+    Sigma = (Gt * Sigma * Gt.transpose()) + Q;
 }
 
 
-
-void data_association()
+bool data_association(const VectorXd& state_vector, const VectorXd& measurements) 
 {
-    return;
+    double x = state_vector(0);
+    double y = state_vector(1);
+    double theta = state_vector(2);
+    double range = measurements(0);
+    double bearing = measurements(1);
+
+    double x_land = x + range * cos(theta + bearing);
+    double y_land = y + range * sin(theta + bearing);
+
+    double association_distance_threshold = 1.9; 
+    double least_distance_square = std::pow(association_distance_threshold, 2);
+
+    // Iterate through all of the cones in the current map
+    for (size_t i = 0; i < landmark_distances.size(); ++i) 
+    {
+        const auto& pair = landmark_distances[i];
+        double current_distance_square = std::pow(x_land - pair.first, 2) + std::pow(y_land - pair.second, 2);
+    
+        if(current_distance_square < least_distance_square) 
+        {
+            return true;  
+        }
+    }
+    return false;  
 }
 
 // UPDATE STEP
@@ -106,7 +107,7 @@ void updateStep(VectorXd& state_vector, MatrixXd& Sigma, const VectorXd& measure
     double theta = state_vector(2);
     
     // Data association
-    data_association();
+    data_association(state_vector, measurements);
     
     // Perception measurements
     double range = measurements(0);
@@ -120,6 +121,7 @@ void updateStep(VectorXd& state_vector, MatrixXd& Sigma, const VectorXd& measure
     {
             double x_land = x + range * cos(bearing + theta);
             double y_land = y + range * sin(bearing + theta);
+            landmark_distances.push_back(std::make_pair(x_land, y_land));
             double dx = x_land - x;
             double dy = y_land - y;
 
@@ -143,8 +145,8 @@ void updateStep(VectorXd& state_vector, MatrixXd& Sigma, const VectorXd& measure
         MatrixXd Kt = Sigma * Ht.transpose() * ((Ht * Sigma * Ht.transpose()) + Rt).inverse();
         
         // FINAL STATE VectorXd
-        state_vector = state_vector + Kt * (zt - zt_exp); // or K* `Δzt
-
+        state_vector = state_vector + Kt * (zt - zt_exp); 
+        std::cout<<"State after update: "<<state_vector.transpose()<<std::endl;
         // FINAL COV MATRIXXd
         Sigma = (MatrixXd::Identity(state_vector.size(), state_vector.size()) - Kt * Ht) * Sigma;
     }
@@ -152,19 +154,24 @@ void updateStep(VectorXd& state_vector, MatrixXd& Sigma, const VectorXd& measure
  
  
 // random velocity "measurements"
-VectorXd generateRandomMotion() {
-    VectorXd velocity(2);
-        velocity << 1.0 + 0.2 * rand() / RAND_MAX, 0.1 * (2.0 * rand() / RAND_MAX - 1.0);
+VectorXd generateRandomMotion() 
+{
+    VectorXd velocity(3);
+    velocity << 1.0 + 0.2 * rand() / RAND_MAX,   // v_x
+                1.0 + 0.2 * rand() / RAND_MAX,   // v_y
+                0.1 * (2.0 * rand() / RAND_MAX - 1.0);  // omega
+
     return velocity;
 }
 
 // random range - bearing "measurements"
-VectorXd generateRandomMeasurement() {
+VectorXd generateRandomMeasurement() 
+{
     VectorXd measurement(2);
-        measurement << 0.1 * rand() / RAND_MAX, 0.1 * (2.0 * rand() / RAND_MAX - 1.0);
+        measurement << 5.0 * rand() / RAND_MAX,
+                       5.0 * (2.0 * rand() / RAND_MAX - 1.0);
     return measurement;
 }
-
 
 int main() 
 {
@@ -186,7 +193,7 @@ int main()
         Rt << 0.1, 0,
              0, 0.1;
      
- int num_steps = 10;
+ int num_steps = 5;
 
     for (int step = 0; step < num_steps; ++step) {
         
@@ -201,7 +208,8 @@ int main()
         updateStep(state_vector, Sigma, measurements, Rt);
 
         // Estimated State
-        std::cout << "Step: " << step << ", Estimated State: " << state_vector.transpose() << std::endl;
+        std::cout<<"End of state: "<<step+1<<std::endl;
+        //std::cout << "Step: " << step << ", Estimated State: " << state_vector.transpose() << std::endl;
     }
 
     return 0;
